@@ -1,5 +1,3 @@
-
-
 import { GoogleGenAI } from "@google/genai";
 import { ANGLES, GeneratedImage, GeneratedVideo, SocialLanguage, ImageAspectRatio } from "../types";
 
@@ -8,7 +6,7 @@ const GEMINI_TEXT_MODEL = 'gemini-2.5-flash';
 const VEO_MODEL = 'veo-3.1-fast-generate-preview';
 
 export class GeminiService {
-  
+
   private getAI() {
     // Always get a fresh instance to capture the latest API key from process.env (which might be updated by window.aistudio selection)
     const apiKey = process.env.API_KEY;
@@ -19,19 +17,19 @@ export class GeminiService {
   }
 
   async generateShowcase(
-    base64Image: string, 
-    modelDescription: string, 
+    base64Image: string,
+    modelDescription: string,
     mimeType: string,
     aspectRatio: ImageAspectRatio = '1:1',
     backgroundBase64?: string,
     backgroundMimeType?: string
   ): Promise<GeneratedImage[]> {
-    
+
     const ai = this.getAI();
 
     // We initiate 3 parallel requests for the 3 angles
     // We handle errors individually so that one failure doesn't fail the entire batch
-    const promises = ANGLES.map(async (angle): Promise<GeneratedImage | null> => {
+    const promises = ANGLES.map(async (angle): Promise<GeneratedImage | { error: string } | null> => {
       try {
         let prompt = `
           You are a professional jewelry photographer and editor.
@@ -43,11 +41,11 @@ export class GeminiService {
         `;
 
         const parts: any[] = [
-           { inlineData: { mimeType: mimeType, data: base64Image } }
+          { inlineData: { mimeType: mimeType, data: base64Image } }
         ];
 
         if (backgroundBase64 && backgroundMimeType) {
-            prompt += `
+          prompt += `
             
             I have also uploaded a background image.
             CONTEXT: The user wants the model to appear in this specific location (e.g. their store or a specific venue).
@@ -58,10 +56,10 @@ export class GeminiService {
             3. CRITICAL: Maintain the perspective, lighting direction, and atmosphere of the background image to ensure REALSIM.
             4. Do not just paste the model; blend shadows and reflections so it looks like the photo was taken there.
             `;
-            // Add background image to parts
-            parts.push({ inlineData: { mimeType: backgroundMimeType, data: backgroundBase64 } });
+          // Add background image to parts
+          parts.push({ inlineData: { mimeType: backgroundMimeType, data: backgroundBase64 } });
         } else {
-            prompt += `
+          prompt += `
             Background: Create a setting that matches the model description (e.g., studio, outdoors, luxury interior).
             `;
         }
@@ -89,28 +87,28 @@ export class GeminiService {
         // Parse response to find image
         let generatedBase64 = '';
         const partsResponse = response.candidates?.[0]?.content?.parts;
-        
+
         if (partsResponse) {
-            for (const part of partsResponse) {
-                if (part.inlineData && part.inlineData.data) {
-                    generatedBase64 = part.inlineData.data;
-                    break;
-                }
+          for (const part of partsResponse) {
+            if (part.inlineData && part.inlineData.data) {
+              generatedBase64 = part.inlineData.data;
+              break;
             }
+          }
         }
 
         if (!generatedBase64) {
           // Attempt to extract text error from model if image is missing
           const textPart = partsResponse?.find(p => p.text)?.text;
           const finishReason = response.candidates?.[0]?.finishReason;
-          
+
           console.warn(`Generation issue for ${angle.label}: Reason=${finishReason}, Text=${textPart?.substring(0, 100)}`);
-          
+
           if (finishReason === 'SAFETY') {
-              throw new Error(`Blocked by safety filters.`);
+            throw new Error(`Blocked by safety filters.`);
           }
           if (textPart) {
-              throw new Error(`Model returned text instead of image: ${textPart.substring(0, 50)}...`);
+            throw new Error(`Model returned text instead of image: ${textPart.substring(0, 50)}...`);
           }
           throw new Error(`No image generated.`);
         }
@@ -122,19 +120,21 @@ export class GeminiService {
           angle: angle.label
         };
 
-      } catch (error) {
+      } catch (error: any) {
         console.error(`Error generating ${angle.label}:`, error);
-        return null;
+        return { error: error.message || "Unknown error" };
       }
     });
 
     const results = await Promise.all(promises);
-    
-    // Filter out failed requests (nulls)
-    const successfulImages = results.filter((img): img is GeneratedImage => img !== null);
-    
+
+    // Filter out failed requests
+    const successfulImages = results.filter((res): res is GeneratedImage => res !== null && !('error' in res));
+    const errors = results.filter((res): res is { error: string } => res !== null && 'error' in res);
+
     if (successfulImages.length === 0) {
-        throw new Error("Generation failed for all angles. Please check your image or try a different description.");
+      const uniqueErrors = Array.from(new Set(errors.map(e => e.error))).join(', ');
+      throw new Error(`Generation failed: ${uniqueErrors}`);
     }
 
     return successfulImages;
@@ -164,7 +164,7 @@ export class GeminiService {
 
     while (!operation.done) {
       await new Promise(resolve => setTimeout(resolve, 5000));
-      operation = await ai.operations.getVideosOperation({operation: operation});
+      operation = await ai.operations.getVideosOperation({ operation: operation });
     }
 
     const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
@@ -191,7 +191,7 @@ export class GeminiService {
     language: SocialLanguage = 'Hebrew'
   ): Promise<string> {
     const ai = this.getAI();
-    
+
     const response = await ai.models.generateContent({
       model: GEMINI_TEXT_MODEL,
       contents: `
