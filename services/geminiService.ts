@@ -26,12 +26,12 @@ export class GeminiService {
   ): Promise<GeneratedImage[]> {
 
     const ai = this.getAI();
+    const results: (GeneratedImage | { error: string } | null)[] = [];
 
-    // We initiate 3 parallel requests for the 3 angles
-    // We handle errors individually so that one failure doesn't fail the entire batch
-    const promises = ANGLES.map(async (angle): Promise<GeneratedImage | { error: string } | null> => {
+    // We generate sequentially to avoid hitting rate limits on the free tier
+    for (const angle of ANGLES) {
       try {
-        let prompt = `
+        let generationPrompt = `
           You are a professional jewelry photographer and editor.
           I have uploaded an image of a piece of jewelry.
           
@@ -45,7 +45,7 @@ export class GeminiService {
         ];
 
         if (backgroundBase64 && backgroundMimeType) {
-          prompt += `
+          generationPrompt += `
             
             I have also uploaded a background image.
             CONTEXT: The user wants the model to appear in this specific location (e.g. their store or a specific venue).
@@ -59,18 +59,18 @@ export class GeminiService {
           // Add background image to parts
           parts.push({ inlineData: { mimeType: backgroundMimeType, data: backgroundBase64 } });
         } else {
-          prompt += `
+          generationPrompt += `
             Background: Create a setting that matches the model description (e.g., studio, outdoors, luxury interior).
             `;
         }
 
-        prompt += `
+        generationPrompt += `
           CRITICAL PRODUCT REQUIREMENTS:
           1. The jewelry in the output MUST look exactly like the provided input jewelry image. Do not alter the design, gems, or metal of the jewelry.
           2. High resolution, professional fashion magazine quality.
         `;
 
-        parts.push({ text: prompt });
+        parts.push({ text: generationPrompt });
 
         const response = await ai.models.generateContent({
           model: GEMINI_IMAGE_MODEL,
@@ -113,20 +113,21 @@ export class GeminiService {
           throw new Error(`No image generated.`);
         }
 
-        return {
+        results.push({
           id: crypto.randomUUID(),
           originalUrl: `data:image/png;base64,${generatedBase64}`,
           prompt: angle.promptSuffix,
           angle: angle.label
-        };
+        });
+
+        // Add a small delay between requests to be nice to the API
+        await new Promise(resolve => setTimeout(resolve, 2000));
 
       } catch (error: any) {
         console.error(`Error generating ${angle.label}:`, error);
-        return { error: error.message || "Unknown error" };
+        results.push({ error: error.message || "Unknown error" });
       }
-    });
-
-    const results = await Promise.all(promises);
+    }
 
     // Filter out failed requests
     const successfulImages = results.filter((res): res is GeneratedImage => res !== null && !('error' in res));
