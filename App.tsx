@@ -1,12 +1,12 @@
-
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Image as ImageIcon, Sparkles, AlertCircle, ShoppingBag, Video, Film, Trash2, X, MapPin, Settings, LogOut, LayoutDashboard, Instagram, Smartphone, Monitor } from 'lucide-react';
+import { Upload, Image as ImageIcon, Sparkles, AlertCircle, ShoppingBag, Video, Film, Trash2, X, MapPin, Settings, LogOut, LayoutDashboard, Instagram, Smartphone, Monitor, Shield } from 'lucide-react';
 import { Button } from './components/Button';
 import { Gallery } from './components/Gallery';
 import { Login } from './components/Login';
 import { AdminDashboard } from './components/AdminDashboard';
+import { SuperAdminDashboard } from './components/SuperAdminDashboard';
 import { geminiService } from './services/geminiService';
-import { AppState, GeneratedImage, GeneratedVideo, GenerationMode, CMSConfig, ThemeColor, ImageAspectRatio } from './types';
+import { AppState, GeneratedImage, GeneratedVideo, GenerationMode, CMSConfig, ThemeColor, ImageAspectRatio, UserRole, UserPermissions } from './types';
 import { fileToBase64, urlToFile } from './utils/imageUtils';
 import { supabase } from './services/supabaseClient';
 
@@ -62,26 +62,9 @@ const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
-
-  useEffect(() => {
-    // Check active session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setIsAuthenticated(!!session);
-      setUserId(session?.user?.id || null);
-      setUserEmail(session?.user?.email || null);
-    });
-
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setIsAuthenticated(!!session);
-      setUserId(session?.user?.id || null);
-      setUserEmail(session?.user?.email || null);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
+  const [userRole, setUserRole] = useState<UserRole>('user');
+  const [permissions, setPermissions] = useState<UserPermissions>({ can_use_photo: true, can_use_video: true, max_credits: 10 });
+  const [isExpired, setIsExpired] = useState(false);
 
   // CMS Configuration State
   const [config, setConfig] = useState<CMSConfig>(() => {
@@ -89,38 +72,25 @@ const App: React.FC = () => {
       const saved = localStorage.getItem('geminiJewelryAppConfig');
       if (saved) {
         const parsed = JSON.parse(saved);
-        // Robust deep merge to ensure no missing fields cause crashes
         return {
           ...DEFAULT_CONFIG,
           ...parsed,
-          branding: {
-            ...DEFAULT_CONFIG.branding,
-            ...(parsed?.branding || {})
-          },
-          content: {
-            ...DEFAULT_CONFIG.content,
-            ...(parsed?.content || {})
-          },
-          features: {
-            ...DEFAULT_CONFIG.features,
-            ...(parsed?.features || {})
-          },
-          watermark: {
-            ...DEFAULT_CONFIG.watermark,
-            ...(parsed?.watermark || {})
-          },
+          branding: { ...DEFAULT_CONFIG.branding, ...(parsed?.branding || {}) },
+          content: { ...DEFAULT_CONFIG.content, ...(parsed?.content || {}) },
+          features: { ...DEFAULT_CONFIG.features, ...(parsed?.features || {}) },
+          watermark: { ...DEFAULT_CONFIG.watermark, ...(parsed?.watermark || {}) },
           examples: Array.isArray(parsed?.examples) ? parsed.examples : DEFAULT_CONFIG.examples
         };
       }
     } catch (e) {
       console.warn("Failed to load config from local storage, resetting to default.", e);
-      // Clear corrupt data
       localStorage.removeItem('geminiJewelryAppConfig');
     }
     return DEFAULT_CONFIG;
   });
 
   const [showAdmin, setShowAdmin] = useState(false);
+  const [showSuperAdmin, setShowSuperAdmin] = useState(false);
 
   const [mode, setMode] = useState<GenerationMode>(GenerationMode.PHOTO);
   const [state, setState] = useState<AppState>(AppState.IDLE);
@@ -146,12 +116,49 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bgInputRef = useRef<HTMLInputElement>(null);
 
+  const fetchUserProfile = async (uid: string) => {
+    const { data } = await supabase.from('profiles').select('role, permissions, expires_at').eq('id', uid).single();
+    if (data) {
+      setUserRole(data.role as UserRole);
+      if (data.permissions) setPermissions(data.permissions);
+
+      // Check expiration
+      if (data.expires_at) {
+        const expiryDate = new Date(data.expires_at);
+        if (new Date() > expiryDate) {
+          setIsExpired(true);
+        }
+      }
+    }
+  };
+
   // Persistence effect
   useEffect(() => {
     localStorage.setItem('geminiJewelryAppConfig', JSON.stringify(config));
-    // Update document title
     document.title = config.branding.storeName;
   }, [config]);
+
+  useEffect(() => {
+    // Check active session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setIsAuthenticated(!!session);
+      setUserId(session?.user?.id || null);
+      setUserEmail(session?.user?.email || null);
+      if (session?.user?.id) fetchUserProfile(session.user.id);
+    });
+
+    // Listen for auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setIsAuthenticated(!!session);
+      setUserId(session?.user?.id || null);
+      setUserEmail(session?.user?.email || null);
+      if (session?.user?.id) fetchUserProfile(session.user.id);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   // Supabase Sync
   useEffect(() => {
@@ -164,18 +171,14 @@ const App: React.FC = () => {
         if (data) {
           console.log("Loaded cloud config:", data);
 
-          // If we have the new 'config' column, use it. Otherwise fallback to legacy columns.
           if (data.config) {
             setConfig(prev => ({
-              ...DEFAULT_CONFIG, // Start with defaults to ensure new fields exist
-              ...data.config,    // Overlay cloud config
-              branding: {
-                ...DEFAULT_CONFIG.branding,
-                ...(data.config.branding || {})
-              }
+              ...DEFAULT_CONFIG,
+              ...data.config,
+              branding: { ...DEFAULT_CONFIG.branding, ...(data.config.branding || {}) }
             }));
           } else {
-            // Legacy fallback (can be removed later)
+            // Legacy fallback
             setConfig(prev => ({
               ...prev,
               branding: {
@@ -187,7 +190,6 @@ const App: React.FC = () => {
             }));
           }
         } else {
-          // No profile found! Create one with defaults.
           console.log("No profile found, creating default...");
           const { error: insertError } = await supabase.from('profiles').insert({
             id: userId,
@@ -197,8 +199,8 @@ const App: React.FC = () => {
           });
 
           if (!insertError) {
-            setConfig(DEFAULT_CONFIG); // Force local state to default
-            localStorage.removeItem('geminiJewelryAppConfig'); // Clear stale local storage
+            setConfig(DEFAULT_CONFIG);
+            localStorage.removeItem('geminiJewelryAppConfig');
           } else {
             console.error("Failed to create default profile", insertError);
           }
@@ -245,7 +247,6 @@ const App: React.FC = () => {
     setConfig(newConfig); // Optimistic local update
 
     if (!userId) return;
-
     try {
       // Update Supabase
       const { error } = await supabase.from('profiles').upsert({
@@ -342,6 +343,12 @@ const App: React.FC = () => {
       return;
     }
 
+    // Check credits
+    if (permissions.max_credits <= 0) {
+      setError("You have run out of credits. Please contact support to purchase more.");
+      return;
+    }
+
     setState(AppState.GENERATING);
     setError(null);
 
@@ -353,7 +360,6 @@ const App: React.FC = () => {
         if (bgFile) {
           bgBase64 = await fileToBase64(bgFile);
         }
-
         const images = await geminiService.generateShowcase(
           base64,
           modelDescription,
@@ -372,6 +378,22 @@ const App: React.FC = () => {
         );
         setGeneratedVideo(video);
       }
+
+      // Deduct credit
+      if (userId) {
+        const newCredits = permissions.max_credits - 1;
+        const { error: updateError } = await supabase
+          .from('profiles')
+          .update({ permissions: { ...permissions, max_credits: newCredits } })
+          .eq('id', userId);
+
+        if (updateError) {
+          console.error("Failed to deduct credit", updateError);
+        } else {
+          setPermissions(prev => ({ ...prev, max_credits: newCredits }));
+        }
+      }
+
       setState(AppState.SUCCESS);
     } catch (err: any) {
       console.error(err);
@@ -404,18 +426,8 @@ const App: React.FC = () => {
       case 'serif': return 'font-serif';
       case 'sans': return 'font-sans';
       case 'hebrew': return 'font-hebrew';
-      case 'arabic': return 'font-arabic';
-      default: return 'font-serif';
+      default: return 'font-sans';
     }
-  };
-
-  if (!isAuthenticated) {
-    return <Login onLogin={() => setIsAuthenticated(true)} branding={config.branding} />;
-  }
-
-  const globalTextStyle = {
-    color: config.branding.primaryTextColor,
-    textAlign: config.branding.textAlign
   };
 
   const cardStyle = {
@@ -423,12 +435,28 @@ const App: React.FC = () => {
     color: config.branding.cardTextColor || '#1c1917'
   };
 
+  if (!isAuthenticated) {
+    return <Login onLogin={() => setIsAuthenticated(true)} branding={config.branding} />;
+  }
+
+  if (isExpired) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-stone-50">
+        <div className="bg-white p-8 rounded-xl shadow-lg max-w-md text-center space-y-4">
+          <AlertCircle size={48} className="mx-auto text-red-500" />
+          <h2 className="text-2xl font-bold text-stone-900">Trial Period Ended</h2>
+          <p className="text-stone-600">Your access to the Jewelry Studio has expired. Please contact support to renew your subscription.</p>
+          <Button onClick={() => supabase.auth.signOut()} variant="outline">Sign Out</Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={`min-h-screen flex flex-col ${getFontFamily()}`}
       style={{
-        backgroundColor: config.branding.backgroundColor,
-        ...globalTextStyle
+        backgroundColor: config.branding.backgroundColor
       }}
       dir={config.branding.direction}
     >
@@ -439,6 +467,13 @@ const App: React.FC = () => {
           config={config}
           onUpdate={handleConfigUpdate}
           onClose={() => setShowAdmin(false)}
+        />
+      )}
+
+      {/* Super Admin Dashboard */}
+      {showSuperAdmin && (
+        <SuperAdminDashboard
+          onClose={() => setShowSuperAdmin(false)}
         />
       )}
 
@@ -463,6 +498,16 @@ const App: React.FC = () => {
               <span className="text-xs text-stone-400 font-medium hidden md:inline-block">
                 {userEmail}
               </span>
+            )}
+            {userRole === 'admin' && (
+              <button
+                onClick={() => setShowSuperAdmin(true)}
+                className="p-2 text-purple-600 hover:bg-purple-50 rounded-full transition-colors flex items-center gap-2"
+                title="Super Admin"
+              >
+                <Shield size={20} />
+                <span className="hidden md:inline text-xs font-bold uppercase tracking-wider">Super Admin</span>
+              </button>
             )}
             <button
               onClick={() => setShowAdmin(true)}
@@ -541,7 +586,7 @@ const App: React.FC = () => {
               <div className="space-y-2">
                 {(config.features.enablePhoto || config.features.enableVideo) && (
                   <div className={`flex bg-stone-200/50 p-1 rounded-lg w-fit mb-4 ${config.branding.textAlign === 'center' ? 'mx-auto' : config.branding.textAlign === 'right' ? 'ml-auto' : ''}`}>
-                    {config.features.enablePhoto && (
+                    {config.features.enablePhoto && permissions.can_use_photo && (
                       <button
                         onClick={() => setMode(GenerationMode.PHOTO)}
                         className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${mode === GenerationMode.PHOTO ? `bg-white shadow-sm ${getThemeClass('text')}` : 'text-stone-500 hover:text-stone-700'}`}
@@ -549,7 +594,7 @@ const App: React.FC = () => {
                         <ImageIcon size={16} /> {config.content.photoModeLabel}
                       </button>
                     )}
-                    {config.features.enableVideo && (
+                    {config.features.enableVideo && permissions.can_use_video && (
                       <button
                         onClick={() => setMode(GenerationMode.VIDEO)}
                         className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${mode === GenerationMode.VIDEO ? `bg-white shadow-sm ${getThemeClass('text')}` : 'text-stone-500 hover:text-stone-700'}`}

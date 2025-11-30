@@ -1,5 +1,4 @@
 
-
 export interface GeneratedImage {
   id: string;
   originalUrl: string; // Base64 or Blob URL
@@ -106,4 +105,25 @@ export interface CMSConfig {
   features: AppFeatures;
   watermark: WatermarkSettings;
   examples: ExampleImage[];
+}
+
+export type UserRole = 'admin' | 'user';
+
+export interface UserPermissions {
+  can_use_photo: boolean;
+  can_use_video: boolean;
+  max_credits: number;
+}
+
+export interface UserProfile {
+  id: string;
+  email?: string;
+  store_name?: string;
+  theme?: ThemeColor;
+  logo_url?: string;
+  config?: CMSConfig;
+  role?: UserRole;
+  permissions?: UserPermissions;
+  created_at?: string;
+  expires_at?: string | null;
 }

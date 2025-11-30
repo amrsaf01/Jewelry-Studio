@@ -13,7 +13,6 @@ export const Login: React.FC<LoginProps> = ({ onLogin, branding }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [isSignUp, setIsSignUp] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -22,21 +21,12 @@ export const Login: React.FC<LoginProps> = ({ onLogin, branding }) => {
     setError(null);
 
     try {
-      if (isSignUp) {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-        });
-        if (error) throw error;
-        alert('Check your email for the login link!');
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
-        onLogin();
-      }
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) throw error;
+      onLogin();
     } catch (error: any) {
       setError(error.message);
     } finally {
@@ -80,9 +70,9 @@ export const Login: React.FC<LoginProps> = ({ onLogin, branding }) => {
               <Sparkles size={32} />
             </div>
           )}
-          <h1 className="text-3xl font-bold text-stone-900 mb-2">{isSignUp ? 'Create Account' : 'Welcome Back'}</h1>
+          <h1 className="text-3xl font-bold text-stone-900 mb-2">Welcome Back</h1>
           <p className="text-stone-500">
-            {isSignUp ? 'Sign up to start creating.' : 'Please sign in to continue.'}
+            Please sign in to continue.
           </p>
         </div>
 
@@ -123,17 +113,14 @@ export const Login: React.FC<LoginProps> = ({ onLogin, branding }) => {
             disabled={loading}
             className={`w-full text-white py-3 rounded-lg font-bold transition-all transform hover:scale-[1.02] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed ${branding.theme === 'gold' ? 'bg-stone-900 hover:bg-black' : getThemeClass('bg')}`}
           >
-            {loading ? 'Loading...' : (isSignUp ? 'Sign Up' : 'Sign In')}
+            {loading ? 'Loading...' : 'Sign In'}
           </button>
         </form>
 
         <div className="mt-6 text-center">
-          <button
-            onClick={() => { setIsSignUp(!isSignUp); setError(null); }}
-            className={`text-sm font-medium hover:underline ${getThemeClass('text')}`}
-          >
-            {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
-          </button>
+          <p className="text-xs text-stone-400">
+            Don't have an account? Contact the administrator.
+          </p>
         </div>
 
         <p className="text-center text-xs text-stone-400 mt-6">
