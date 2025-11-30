@@ -60,6 +60,28 @@ const DEFAULT_CONFIG: CMSConfig = {
 
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Check active session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setIsAuthenticated(!!session);
+      setUserId(session?.user?.id || null);
+      setUserEmail(session?.user?.email || null);
+    });
+
+    // Listen for auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setIsAuthenticated(!!session);
+      setUserId(session?.user?.id || null);
+      setUserEmail(session?.user?.email || null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   // CMS Configuration State
   const [config, setConfig] = useState<CMSConfig>(() => {
@@ -133,20 +155,53 @@ const App: React.FC = () => {
 
   // Supabase Sync
   useEffect(() => {
+    if (!userId) return; // Only sync if user is logged in
+
     const loadCloudConfig = async () => {
       try {
-        const { data, error } = await supabase.from('profiles').select('*').limit(1).single();
+        const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
+
         if (data) {
           console.log("Loaded cloud config:", data);
-          setConfig(prev => ({
-            ...prev,
-            branding: {
-              ...prev.branding,
-              storeName: data.store_name || prev.branding.storeName,
-              theme: data.theme || prev.branding.theme,
-              logoUrl: data.logo_url || prev.branding.logoUrl
-            }
-          }));
+
+          // If we have the new 'config' column, use it. Otherwise fallback to legacy columns.
+          if (data.config) {
+            setConfig(prev => ({
+              ...DEFAULT_CONFIG, // Start with defaults to ensure new fields exist
+              ...data.config,    // Overlay cloud config
+              branding: {
+                ...DEFAULT_CONFIG.branding,
+                ...(data.config.branding || {})
+              }
+            }));
+          } else {
+            // Legacy fallback (can be removed later)
+            setConfig(prev => ({
+              ...prev,
+              branding: {
+                ...prev.branding,
+                storeName: data.store_name || prev.branding.storeName,
+                theme: data.theme || prev.branding.theme,
+                logoUrl: data.logo_url || prev.branding.logoUrl
+              }
+            }));
+          }
+        } else {
+          // No profile found! Create one with defaults.
+          console.log("No profile found, creating default...");
+          const { error: insertError } = await supabase.from('profiles').insert({
+            id: userId,
+            config: DEFAULT_CONFIG,
+            store_name: DEFAULT_CONFIG.branding.storeName,
+            theme: DEFAULT_CONFIG.branding.theme
+          });
+
+          if (!insertError) {
+            setConfig(DEFAULT_CONFIG); // Force local state to default
+            localStorage.removeItem('geminiJewelryAppConfig'); // Clear stale local storage
+          } else {
+            console.error("Failed to create default profile", insertError);
+          }
         }
       } catch (e) {
         console.error("Failed to load cloud config", e);
@@ -156,57 +211,57 @@ const App: React.FC = () => {
 
     // Real-time subscription
     const subscription = supabase
-      .channel('profiles')
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, payload => {
+      .channel(`profiles:${userId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${userId}` }, payload => {
         console.log("Received real-time update:", payload);
         const newData = payload.new;
-        setConfig(prev => ({
-          ...prev,
-          branding: {
-            ...prev.branding,
-            storeName: newData.store_name || prev.branding.storeName,
-            theme: newData.theme || prev.branding.theme,
-            logoUrl: newData.logo_url || prev.branding.logoUrl
-          }
-        }));
+
+        if (newData.config) {
+          setConfig(prev => ({
+            ...prev,
+            ...newData.config
+          }));
+        } else {
+          // Legacy fallback
+          setConfig(prev => ({
+            ...prev,
+            branding: {
+              ...prev.branding,
+              storeName: newData.store_name || prev.branding.storeName,
+              theme: newData.theme || prev.branding.theme,
+              logoUrl: newData.logo_url || prev.branding.logoUrl
+            }
+          }));
+        }
       })
       .subscribe();
 
     return () => {
       subscription.unsubscribe();
     };
-  }, []);
+  }, [userId]);
 
   const handleConfigUpdate = async (newConfig: CMSConfig) => {
     setConfig(newConfig); // Optimistic local update
 
+    if (!userId) return;
+
     try {
       // Update Supabase
-      // We assume there's only one profile for now (MVP)
-      const { data } = await supabase.from('profiles').select('id').limit(1).single();
+      const { error } = await supabase.from('profiles').upsert({
+        id: userId,
+        config: newConfig, // Save full config to JSONB
+        // Keep legacy columns in sync for now
+        store_name: newConfig.branding.storeName,
+        theme: newConfig.branding.theme,
+        logo_url: newConfig.branding.logoUrl
+      });
 
-      if (data) {
-        await supabase.from('profiles').update({
-          store_name: newConfig.branding.storeName,
-          theme: newConfig.branding.theme,
-          logo_url: newConfig.branding.logoUrl
-        }).eq('id', data.id);
-      } else {
-        // Insert new profile if none exists
-        await supabase.from('profiles').insert({
-          store_name: newConfig.branding.storeName,
-          theme: newConfig.branding.theme,
-          logo_url: newConfig.branding.logoUrl
-        });
-      }
+      if (error) throw error;
     } catch (e) {
       console.error("Failed to sync to cloud", e);
     }
   };
-
-  useEffect(() => {
-    checkApiKey();
-  }, []);
 
   const checkApiKey = async () => {
     try {
@@ -222,6 +277,10 @@ const App: React.FC = () => {
       setHasApiKey(false);
     }
   };
+
+  useEffect(() => {
+    checkApiKey();
+  }, []);
 
   const handleSelectKey = async () => {
     try {
@@ -396,9 +455,15 @@ const App: React.FC = () => {
             )}
             <div>
               <h1 className="text-xl font-bold text-stone-900 tracking-tight">{config.branding.storeName}</h1>
+              <span className="text-[10px] font-mono text-stone-400 bg-stone-100 px-1.5 py-0.5 rounded-full">v1.3-JEWELRY</span>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            {userEmail && (
+              <span className="text-xs text-stone-400 font-medium hidden md:inline-block">
+                {userEmail}
+              </span>
+            )}
             <button
               onClick={() => setShowAdmin(true)}
               className="p-2 text-stone-500 hover:text-stone-800 hover:bg-stone-100 rounded-full transition-colors flex items-center gap-2"
@@ -407,7 +472,7 @@ const App: React.FC = () => {
               <LayoutDashboard size={20} />
               <span className="hidden md:inline text-xs font-bold uppercase tracking-wider">Admin</span>
             </button>
-            <button onClick={() => setIsAuthenticated(false)} className="p-2 text-stone-500 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors" title="Logout">
+            <button onClick={() => supabase.auth.signOut()} className="p-2 text-stone-500 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors" title="Logout">
               <LogOut size={20} />
             </button>
           </div>
@@ -534,9 +599,9 @@ const App: React.FC = () => {
                 <div
                   onClick={() => fileInputRef.current?.click()}
                   className={`
-                    cursor-pointer border-2 border-dashed rounded-xl p-8 transition-all duration-300 flex flex-col items-center justify-center text-center gap-4 group
-                    ${previewUrl ? `${getThemeClass('border')} ${config.branding.theme === 'gold' ? 'bg-gold-50/30' : 'bg-stone-50'}` : `border-stone-300 hover:${getThemeClass('border')} hover:bg-stone-50`}
-                  `}
+                      cursor-pointer border-2 border-dashed rounded-xl p-8 transition-all duration-300 flex flex-col items-center justify-center text-center gap-4 group
+                      ${previewUrl ? `${getThemeClass('border')} ${config.branding.theme === 'gold' ? 'bg-gold-50/30' : 'bg-stone-50'}` : `border-stone-300 hover:${getThemeClass('border')} hover:bg-stone-50`}
+                    `}
                 >
                   {previewUrl ? (
                     <div className="relative w-32 h-32 rounded-lg overflow-hidden shadow-md">

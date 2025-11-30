@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { Lock, Sparkles } from 'lucide-react';
 import { CMSConfig } from '../types';
+import { supabase } from '../services/supabaseClient';
 
 interface LoginProps {
   onLogin: () => void;
@@ -9,27 +10,47 @@ interface LoginProps {
 }
 
 export const Login: React.FC<LoginProps> = ({ onLogin, branding }) => {
-  const [code, setCode] = useState('');
-  const [error, setError] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Simple mock authentication - In a real app this would verify against a backend
-    // Accepting 'GEMINI' or any non-empty string for demo purposes if user didn't set a specific one
-    if (code.length > 0) {
-      onLogin();
-    } else {
-      setError(true);
+    setLoading(true);
+    setError(null);
+
+    try {
+      if (isSignUp) {
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+        });
+        if (error) throw error;
+        alert('Check your email for the login link!');
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (error) throw error;
+        onLogin();
+      }
+    } catch (error: any) {
+      setError(error.message);
+    } finally {
+      setLoading(false);
     }
   };
 
   const getFontFamily = () => {
     switch (branding.fontFamily) {
-        case 'serif': return 'font-serif';
-        case 'sans': return 'font-sans';
-        case 'hebrew': return 'font-hebrew';
-        case 'arabic': return 'font-arabic';
-        default: return 'font-serif';
+      case 'serif': return 'font-serif';
+      case 'sans': return 'font-sans';
+      case 'hebrew': return 'font-hebrew';
+      case 'arabic': return 'font-arabic';
+      default: return 'font-serif';
     }
   };
 
@@ -42,55 +63,79 @@ export const Login: React.FC<LoginProps> = ({ onLogin, branding }) => {
   };
 
   return (
-    <div 
-        className={`min-h-screen flex items-center justify-center p-4 ${getFontFamily()}`}
-        style={{ 
-            backgroundColor: branding.backgroundColor || '#1c1917',
-            color: branding.primaryTextColor || '#ffffff'
-        }}
-        dir={branding.direction}
+    <div
+      className={`min-h-screen flex items-center justify-center p-4 ${getFontFamily()}`}
+      style={{
+        backgroundColor: branding.backgroundColor || '#1c1917',
+        color: branding.primaryTextColor || '#ffffff'
+      }}
+      dir={branding.direction}
     >
       <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full animate-in zoom-in duration-300">
         <div className="text-center mb-8">
-            {branding.logoUrl ? (
-                <img src={branding.logoUrl} alt="Logo" className="h-16 mx-auto mb-4 object-contain" />
-            ) : (
-                <div className={`inline-flex items-center justify-center w-16 h-16 rounded-full mb-4 text-white shadow-lg ${getThemeClass('bg')}`}>
-                    <Sparkles size={32} />
-                </div>
-            )}
-          <h1 className="text-3xl font-bold text-stone-900 mb-2">Welcome Back</h1>
-          <p className="text-stone-500">Please enter your access code to enter the studio.</p>
+          {branding.logoUrl ? (
+            <img src={branding.logoUrl} alt="Logo" className="h-16 mx-auto mb-4 object-contain" />
+          ) : (
+            <div className={`inline-flex items-center justify-center w-16 h-16 rounded-full mb-4 text-white shadow-lg ${getThemeClass('bg')}`}>
+              <Sparkles size={32} />
+            </div>
+          )}
+          <h1 className="text-3xl font-bold text-stone-900 mb-2">{isSignUp ? 'Create Account' : 'Welcome Back'}</h1>
+          <p className="text-stone-500">
+            {isSignUp ? 'Sign up to start creating.' : 'Please sign in to continue.'}
+          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-2 text-left rtl:text-right">Access Code</label>
+            <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-2 text-left rtl:text-right">Email</label>
             <div className="relative">
-              <Lock className={`absolute ${branding.direction === 'rtl' ? 'right-3' : 'left-3'} top-1/2 -translate-y-1/2 text-stone-400`} size={18} />
-              <input 
-                type="password" 
-                value={code}
-                onChange={(e) => {
-                  setCode(e.target.value);
-                  setError(false);
-                }}
-                className={`w-full py-3 bg-stone-50 border rounded-lg outline-none focus:ring-2 transition-all ${branding.direction === 'rtl' ? 'pr-10 pl-4' : 'pl-10 pr-4'} ${error ? 'border-red-300 focus:ring-red-100' : `border-stone-200 ${getThemeClass('ring')} border-stone-200`} text-stone-900`}
-                placeholder="Enter code..."
-                autoFocus
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className={`w-full py-3 bg-stone-50 border rounded-lg outline-none focus:ring-2 transition-all px-4 ${error ? 'border-red-300 focus:ring-red-100' : `border-stone-200 ${getThemeClass('ring')} border-stone-200`} text-stone-900`}
+                placeholder="name@example.com"
+                required
               />
             </div>
-            {error && <p className="text-red-500 text-xs mt-2 text-left rtl:text-right">Please enter an access code.</p>}
           </div>
 
-          <button 
+          <div>
+            <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-2 text-left rtl:text-right">Password</label>
+            <div className="relative">
+              <Lock className={`absolute ${branding.direction === 'rtl' ? 'right-3' : 'left-3'} top-1/2 -translate-y-1/2 text-stone-400`} size={18} />
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className={`w-full py-3 bg-stone-50 border rounded-lg outline-none focus:ring-2 transition-all ${branding.direction === 'rtl' ? 'pr-10 pl-4' : 'pl-10 pr-4'} ${error ? 'border-red-300 focus:ring-red-100' : `border-stone-200 ${getThemeClass('ring')} border-stone-200`} text-stone-900`}
+                placeholder="••••••••"
+                required
+              />
+            </div>
+          </div>
+
+          {error && <p className="text-red-500 text-xs mt-2 text-left rtl:text-right">{error}</p>}
+
+          <button
             type="submit"
-            className={`w-full text-white py-3 rounded-lg font-bold transition-all transform hover:scale-[1.02] shadow-lg ${branding.theme === 'gold' ? 'bg-stone-900 hover:bg-black' : getThemeClass('bg')}`}
+            disabled={loading}
+            className={`w-full text-white py-3 rounded-lg font-bold transition-all transform hover:scale-[1.02] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed ${branding.theme === 'gold' ? 'bg-stone-900 hover:bg-black' : getThemeClass('bg')}`}
           >
-            Enter Studio
+            {loading ? 'Loading...' : (isSignUp ? 'Sign Up' : 'Sign In')}
           </button>
         </form>
-        
+
+        <div className="mt-6 text-center">
+          <button
+            onClick={() => { setIsSignUp(!isSignUp); setError(null); }}
+            className={`text-sm font-medium hover:underline ${getThemeClass('text')}`}
+          >
+            {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
+          </button>
+        </div>
+
         <p className="text-center text-xs text-stone-400 mt-6">
           Powered by Gemini 2.5 & Veo
         </p>
